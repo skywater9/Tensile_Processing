@@ -1,6 +1,18 @@
-data/
+# Python
 __pycache__/
 .ipynb_checkpoints/
+.venv/
+
+# OS
 .DS_Store
 Thumbs.db
-.venv/
+
+# Data outputs
+data/raw/*
+data/processed/*
+results/*
+
+# Keep directory structure
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!results/.gitkeep

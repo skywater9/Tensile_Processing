@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -200,16 +200,19 @@ def compute_engineering(
     metrics = _compute_metrics(full)
 
     summary = {
-        "width_mm": width_mm,
-        "thickness_mm": thickness_mm,
-        "area_m2": area_m2,
-        "Fmax_N": f_max,
-        "F_thresh_N": f_thresh,
-        "keep_multiplier": keep_multiplier,
-        "L0_m": l0_m,
-        "n_rows_raw": int(len(raw)),
-        "n_rows_kept": int(keep_flag.sum()),
-        **metrics,
+        "specimen_geometry": {
+            "width_mm": width_mm,
+            "thickness_mm": thickness_mm,
+            "area_m2": area_m2,
+        },
+        "processing": {
+            "F_thresh_N": f_thresh,
+            "keep_multiplier": keep_multiplier,
+            "L0_m": l0_m,
+            "n_rows_raw": int(len(raw)),
+            "n_rows_kept": int(keep_flag.sum()),
+        },
+        "metrics": metrics,
     }
 
     return final, summary, full
@@ -222,6 +225,7 @@ def save_outputs(
     full: pd.DataFrame,
     final: pd.DataFrame,
     summary: dict,
+    export_debug: bool,
 ) -> None:
     out_dir = out_root / stem
     if out_dir.exists():
@@ -231,8 +235,9 @@ def save_outputs(
             out_dir.unlink()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    raw.to_csv(out_dir / f"{stem}_raw_export.csv", index=False)
-    full.to_csv(out_dir / f"{stem}_processed_full.csv", index=False)
+    if export_debug:
+        raw.to_csv(out_dir / f"{stem}_raw_export.csv", index=False)
+        full.to_csv(out_dir / f"{stem}_processed_full.csv", index=False)
     final.to_csv(out_dir / f"{stem}_final_export.csv", index=False)
 
     (out_dir / f"{stem}_summary.json").write_text(json.dumps(summary, indent=2))
@@ -278,6 +283,11 @@ def main() -> None:
     ap.add_argument("--fth-min", type=float, default=1.0, help="Minimum force threshold in N for L0 detection.")
     ap.add_argument("--fth-frac", type=float, default=0.01, help="Force threshold as fraction of max force.")
     ap.add_argument("--keep-mult", type=float, default=2.0, help="keep_flag condition: F >= keep_mult * F_thresh.")
+    ap.add_argument(
+        "--export-debug",
+        action="store_true",
+        help="Write raw_export and processed_full CSVs for debugging.",
+    )
     args = ap.parse_args()
 
     in_path = Path(args.input)
@@ -286,9 +296,14 @@ def main() -> None:
     files, batch_name = _resolve_inputs(in_path)
     batch_dir = _prepare_batch_dir(out_dir, batch_name)
 
-    processed_at = datetime.now().isoformat(timespec="seconds")
-    summaries = []
+    generated_at_utc = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    code_version = "unknown"
+    try:
+        import subprocess
 
+        code_version = f"git:{subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD'], text=True).strip()}"
+    except Exception:
+        pass
     for f in files:
         raw = read_raw_table(f)
         final, summary, full = compute_engineering(
@@ -299,13 +314,15 @@ def main() -> None:
             f_thresh_frac_of_max=args.fth_frac,
             keep_multiplier=args.keep_mult,
         )
-        save_outputs(batch_dir, f.stem, raw, full, final, summary)
-        summaries.append({"file": f.name, "processed_at": processed_at, **summary})
-        print(f"Processed: {f.name}  -> kept {summary['n_rows_kept']}/{summary['n_rows_raw']} rows")
-
-    batch_summary_path = batch_dir / f"{batch_name}_batch_summary.csv"
-    pd.DataFrame(summaries).to_csv(batch_summary_path, index=False)
-    print(f"Wrote batch summary: {batch_summary_path}")
+        summary_out = {
+            "test_group": batch_name,
+            "generated_at_utc": generated_at_utc,
+            "code_version": code_version,
+            **summary,
+        }
+        save_outputs(batch_dir, f.stem, raw, full, final, summary_out, export_debug=args.export_debug)
+        counts = summary["processing"]
+        print(f"Processed: {f.name}  -> kept {counts['n_rows_kept']}/{counts['n_rows_raw']} rows")
 
 
 if __name__ == "__main__":
