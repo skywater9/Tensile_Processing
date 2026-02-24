@@ -117,11 +117,10 @@ def _find_apparent_modulus_window(
 
 
 def _compute_metrics(full: pd.DataFrame) -> dict:
-    """Compute summary metrics from kept region only."""
-    kept = full.loc[full["keep_flag"]].copy()
-    kept = kept[np.isfinite(kept["strain_eng"]) & np.isfinite(kept["stress_eng_MPa"])]
+    """Compute summary metrics from all valid processed rows."""
+    valid = full[np.isfinite(full["strain_eng"]) & np.isfinite(full["stress_eng_MPa"])].copy()
 
-    if len(kept) < 5:
+    if len(valid) < 5:
         return {
             "UTS_MPa": float("nan"),
             "strain_at_UTS": float("nan"),
@@ -131,9 +130,9 @@ def _compute_metrics(full: pd.DataFrame) -> dict:
             "apparent_Youngs_modulus_window_MPa": [float("nan"), float("nan")],
         }
 
-    kept = kept.sort_values("strain_eng")
-    strain = kept["strain_eng"].to_numpy(float)
-    stress = kept["stress_eng_MPa"].to_numpy(float)
+    valid = valid.sort_values("strain_eng")
+    strain = valid["strain_eng"].to_numpy(float)
+    stress = valid["stress_eng_MPa"].to_numpy(float)
 
     uts = float(np.nanmax(stress))
     i_uts = int(np.nanargmax(stress))
@@ -159,9 +158,8 @@ def compute_engineering(
     thickness_mm: float,
     f_thresh_min_N: float = 1.0,
     f_thresh_frac_of_max: float = 0.01,
-    keep_multiplier: float = 2.0,
 ) -> tuple[pd.DataFrame, dict, pd.DataFrame]:
-    """Compute strain/stress, keep_flag, and summary metrics."""
+    """Compute strain/stress and summary metrics."""
     time_s = raw["time_s"].to_numpy(float)
     marker_dist_m = raw["marker_dist_m"].to_numpy(float)
     force_N = raw["force_N"].to_numpy(float)
@@ -180,8 +178,6 @@ def compute_engineering(
     strain_eng = (marker_dist_m - l0_m) / l0_m
     stress_MPa = (force_N / area_m2) / 1e6
 
-    keep_flag = force_N >= (keep_multiplier * f_thresh)
-
     full = pd.DataFrame(
         {
             "time_s": time_s,
@@ -189,13 +185,10 @@ def compute_engineering(
             "force_N": force_N,
             "strain_eng": strain_eng,
             "stress_eng_MPa": stress_MPa,
-            "keep_flag": keep_flag,
         }
     )
 
-    final = full.loc[keep_flag, ["strain_eng", "stress_eng_MPa"]].copy()
-    final = final.dropna().sort_values("strain_eng")
-    final = final.groupby("strain_eng", as_index=False)["stress_eng_MPa"].mean()
+    final = full[["strain_eng", "stress_eng_MPa"]].copy().dropna()
 
     metrics = _compute_metrics(full)
 
@@ -207,10 +200,9 @@ def compute_engineering(
         },
         "processing": {
             "F_thresh_N": f_thresh,
-            "keep_multiplier": keep_multiplier,
             "L0_m": l0_m,
             "n_rows_raw": int(len(raw)),
-            "n_rows_kept": int(keep_flag.sum()),
+            "n_rows_output": int(len(final)),
         },
         "metrics": metrics,
     }
@@ -264,7 +256,7 @@ def _prepare_batch_dir(out_dir: Path, batch_name: str) -> Path:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Process raw tensile data into trimmed engineering stress-strain.")
+    ap = argparse.ArgumentParser(description="Process raw tensile data into engineering stress-strain.")
     ap.add_argument("--input", required=True, help="Path to raw .csv file OR a folder of .csv files.")
     ap.add_argument(
         "--out",
@@ -275,7 +267,6 @@ def main() -> None:
     ap.add_argument("--thickness-mm", type=float, required=True, help="Specimen thickness in mm.")
     ap.add_argument("--fth-min", type=float, default=1.0, help="Minimum force threshold in N for L0 detection.")
     ap.add_argument("--fth-frac", type=float, default=0.01, help="Force threshold as fraction of max force.")
-    ap.add_argument("--keep-mult", type=float, default=2.0, help="keep_flag condition: F >= keep_mult * F_thresh.")
     ap.add_argument(
         "--export-debug",
         action="store_true",
@@ -305,7 +296,6 @@ def main() -> None:
             thickness_mm=args.thickness_mm,
             f_thresh_min_N=args.fth_min,
             f_thresh_frac_of_max=args.fth_frac,
-            keep_multiplier=args.keep_mult,
         )
         summary_out = {
             "test_group": batch_name,
@@ -315,7 +305,7 @@ def main() -> None:
         }
         save_outputs(batch_dir, f.stem, raw, full, final, summary_out, export_debug=args.export_debug)
         counts = summary["processing"]
-        print(f"Processed: {f.name}  -> kept {counts['n_rows_kept']}/{counts['n_rows_raw']} rows")
+        print(f"Processed: {f.name}  -> wrote {counts['n_rows_output']}/{counts['n_rows_raw']} rows")
 
 
 if __name__ == "__main__":

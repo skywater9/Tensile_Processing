@@ -37,9 +37,8 @@ def compute_force_displacement(
     raw: pd.DataFrame,
     f_thresh_min_N: float = 1.0,
     f_thresh_frac_of_max: float = 0.01,
-    keep_multiplier: float = 2.0,
 ) -> tuple[pd.DataFrame, dict, pd.DataFrame]:
-    """Compute displacement, keep_flag, and summary metrics."""
+    """Compute displacement and summary metrics."""
     time_s = raw["time_s"].to_numpy(float)
     marker_dist_m = raw["marker_dist_m"].to_numpy(float)
     force_N = raw["force_N"].to_numpy(float)
@@ -55,21 +54,16 @@ def compute_force_displacement(
 
     displacement_m = marker_dist_m - l0_m
 
-    keep_flag = force_N >= (keep_multiplier * f_thresh)
-
     full = pd.DataFrame(
         {
             "time_s": time_s,
             "marker_dist_m": marker_dist_m,
             "force_N": force_N,
             "displacement_m": displacement_m,
-            "keep_flag": keep_flag,
         }
     )
 
-    final = full.loc[keep_flag, ["displacement_m", "force_N"]].copy()
-    final = final.dropna().sort_values("displacement_m")
-    final = final.groupby("displacement_m", as_index=False)["force_N"].mean()
+    final = full[["displacement_m", "force_N"]].copy().dropna()
 
     metrics = {
         "max_force_N": float(np.nanmax(force_N)) if len(force_N) else float("nan"),
@@ -79,10 +73,9 @@ def compute_force_displacement(
     summary = {
         "processing": {
             "F_thresh_N": f_thresh,
-            "keep_multiplier": keep_multiplier,
             "L0_m": l0_m,
             "n_rows_raw": int(len(raw)),
-            "n_rows_kept": int(keep_flag.sum()),
+            "n_rows_output": int(len(final)),
         },
         "metrics": metrics,
     }
@@ -145,7 +138,6 @@ def main() -> None:
     )
     ap.add_argument("--fth-min", type=float, default=1.0, help="Minimum force threshold in N for L0 detection.")
     ap.add_argument("--fth-frac", type=float, default=0.01, help="Force threshold as fraction of max force.")
-    ap.add_argument("--keep-mult", type=float, default=2.0, help="keep_flag condition: F >= keep_mult * F_thresh.")
     ap.add_argument(
         "--export-debug",
         action="store_true",
@@ -173,7 +165,6 @@ def main() -> None:
             raw,
             f_thresh_min_N=args.fth_min,
             f_thresh_frac_of_max=args.fth_frac,
-            keep_multiplier=args.keep_mult,
         )
         summary_out = {
             "test_group": batch_name,
@@ -183,7 +174,7 @@ def main() -> None:
         }
         save_outputs(batch_dir, f.stem, raw, full, final, summary_out, export_debug=args.export_debug)
         counts = summary["processing"]
-        print(f"Processed: {f.name}  -> kept {counts['n_rows_kept']}/{counts['n_rows_raw']} rows")
+        print(f"Processed: {f.name}  -> wrote {counts['n_rows_output']}/{counts['n_rows_raw']} rows")
 
 
 if __name__ == "__main__":
