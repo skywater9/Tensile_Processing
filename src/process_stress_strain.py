@@ -6,11 +6,11 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
 REQUIRED_COLUMNS = ["time_s", "marker_dist_m", "force_N"]
+OUTPUT_SUBDIR = "stress_strain"
 
 
 def read_raw_table(path: Path) -> pd.DataFrame:
@@ -242,17 +242,6 @@ def save_outputs(
 
     (out_dir / f"{stem}_summary.json").write_text(json.dumps(summary, indent=2))
 
-    plt.figure()
-    plt.plot(full["strain_eng"], full["stress_eng_MPa"], alpha=0.25, label="all points")
-    plt.plot(final["strain_eng"], final["stress_eng_MPa"], linewidth=2.0, label="trimmed (final)")
-    plt.xlabel("Engineering strain")
-    plt.ylabel("Engineering stress (MPa)")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(out_dir / f"{stem}_stress_strain.png", dpi=200)
-    plt.close()
-
-
 def _resolve_inputs(in_path: Path) -> tuple[list[Path], str]:
     if in_path.is_dir():
         files = sorted([p for p in in_path.iterdir() if p.suffix.lower() == ".csv"])
@@ -277,7 +266,11 @@ def _prepare_batch_dir(out_dir: Path, batch_name: str) -> Path:
 def main() -> None:
     ap = argparse.ArgumentParser(description="Process raw tensile data into trimmed engineering stress-strain.")
     ap.add_argument("--input", required=True, help="Path to raw .csv file OR a folder of .csv files.")
-    ap.add_argument("--out", default="data\\processed", help="Output directory.")
+    ap.add_argument(
+        "--out",
+        default="data\\processed",
+        help=f"Output root directory. Results are written under <out>\\{OUTPUT_SUBDIR}.",
+    )
     ap.add_argument("--width-mm", type=float, required=True, help="Specimen width in mm.")
     ap.add_argument("--thickness-mm", type=float, required=True, help="Specimen thickness in mm.")
     ap.add_argument("--fth-min", type=float, default=1.0, help="Minimum force threshold in N for L0 detection.")
@@ -291,7 +284,7 @@ def main() -> None:
     args = ap.parse_args()
 
     in_path = Path(args.input)
-    out_dir = Path(args.out)
+    out_dir = Path(args.out) / OUTPUT_SUBDIR
 
     files, batch_name = _resolve_inputs(in_path)
     batch_dir = _prepare_batch_dir(out_dir, batch_name)
