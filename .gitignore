@@ -8,11 +8,11 @@ __pycache__/
 Thumbs.db
 
 # Data outputs
-data/raw/*
-data/processed/*
-results/*
+data/raw_input/*
+data/processed_force_disp/*
+data/processed_stress_strain/*
 
 # Keep directory structure
-!data/raw/.gitkeep
-!data/processed/.gitkeep
-!results/.gitkeep
+!data/raw_input/.gitkeep
+!data/processed_force_disp/.gitkeep
+!data/processed_stress_strain/.gitkeep

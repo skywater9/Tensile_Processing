@@ -13,8 +13,8 @@ REQUIRED_COLUMNS = ["time_s", "marker_dist_m", "force_N"]
 OUTPUT_SUBDIR = "stress_strain"
 
 
-def read_raw_table(path: Path) -> pd.DataFrame:
-    """Read raw data from CSV. Returns df with columns: time_s, marker_dist_m, force_N."""
+def read_preprocessing_table(path: Path) -> pd.DataFrame:
+    """Read preprocessing data from CSV. Returns df with columns: time_s, marker_dist_m, force_N."""
     if path.suffix.lower() != ".csv":
         raise ValueError(f"Unsupported file type: {path.suffix}. Only .csv is supported.")
 
@@ -153,16 +153,16 @@ def _compute_metrics(full: pd.DataFrame) -> dict:
 
 
 def compute_engineering(
-    raw: pd.DataFrame,
+    preprocessing: pd.DataFrame,
     width_mm: float,
     thickness_mm: float,
     f_thresh_min_N: float = 1.0,
     f_thresh_frac_of_max: float = 0.01,
 ) -> tuple[pd.DataFrame, dict, pd.DataFrame]:
     """Compute strain/stress and summary metrics."""
-    time_s = raw["time_s"].to_numpy(float)
-    marker_dist_m = raw["marker_dist_m"].to_numpy(float)
-    force_N = raw["force_N"].to_numpy(float)
+    time_s = preprocessing["time_s"].to_numpy(float)
+    marker_dist_m = preprocessing["marker_dist_m"].to_numpy(float)
+    force_N = preprocessing["force_N"].to_numpy(float)
 
     area_m2 = (width_mm / 1000.0) * (thickness_mm / 1000.0)
 
@@ -201,7 +201,7 @@ def compute_engineering(
         "processing": {
             "F_thresh_N": f_thresh,
             "L0_m": l0_m,
-            "n_rows_raw": int(len(raw)),
+            "n_rows_preprocessing": int(len(preprocessing)),
             "n_rows_output": int(len(final)),
         },
         "metrics": metrics,
@@ -213,7 +213,7 @@ def compute_engineering(
 def save_outputs(
     out_root: Path,
     stem: str,
-    raw: pd.DataFrame,
+    preprocessing: pd.DataFrame,
     full: pd.DataFrame,
     final: pd.DataFrame,
     summary: dict,
@@ -228,7 +228,7 @@ def save_outputs(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if export_debug:
-        raw.to_csv(out_dir / f"{stem}_raw_export.csv", index=False)
+        preprocessing.to_csv(out_dir / f"{stem}_preprocessing_export.csv", index=False)
         full.to_csv(out_dir / f"{stem}_processed_full.csv", index=False)
     final.to_csv(out_dir / f"{stem}_final_export.csv", index=False)
 
@@ -256,8 +256,8 @@ def _prepare_batch_dir(out_dir: Path, batch_name: str) -> Path:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Process raw tensile data into engineering stress-strain.")
-    ap.add_argument("--input", required=True, help="Path to raw .csv file OR a folder of .csv files.")
+    ap = argparse.ArgumentParser(description="Process preprocessing tensile data into engineering stress-strain.")
+    ap.add_argument("--input", required=True, help="Path to preprocessing .csv file OR a folder of .csv files.")
     ap.add_argument(
         "--out",
         default="data\\processed",
@@ -270,7 +270,7 @@ def main() -> None:
     ap.add_argument(
         "--export-debug",
         action="store_true",
-        help="Write raw_export and processed_full CSVs for debugging.",
+        help="Write preprocessing_export and processed_full CSVs for debugging.",
     )
     args = ap.parse_args()
 
@@ -289,9 +289,9 @@ def main() -> None:
     except Exception:
         pass
     for f in files:
-        raw = read_raw_table(f)
+        preprocessing = read_preprocessing_table(f)
         final, summary, full = compute_engineering(
-            raw,
+            preprocessing,
             width_mm=args.width_mm,
             thickness_mm=args.thickness_mm,
             f_thresh_min_N=args.fth_min,
@@ -303,9 +303,9 @@ def main() -> None:
             "code_version": code_version,
             **summary,
         }
-        save_outputs(batch_dir, f.stem, raw, full, final, summary_out, export_debug=args.export_debug)
+        save_outputs(batch_dir, f.stem, preprocessing, full, final, summary_out, export_debug=args.export_debug)
         counts = summary["processing"]
-        print(f"Processed: {f.name}  -> wrote {counts['n_rows_output']}/{counts['n_rows_raw']} rows")
+        print(f"Processed: {f.name}  -> wrote {counts['n_rows_output']}/{counts['n_rows_preprocessing']} rows")
 
 
 if __name__ == "__main__":
