@@ -17,8 +17,8 @@ import numpy as np
 import pandas as pd
 
 # Configuration: edit these constants before running the script.
-INPUT_PATH = Path("data/preprocessing")  # One CSV or a folder of CSV files.
-OUT_ROOT = Path("data/processed")
+INPUT_PATH = Path("data/raw_input")  # One combined CSV or a folder of combined CSV files.
+OUT_ROOT = Path("data/processed_stress_strain")
 WIDTH_MM = 10.0
 THICKNESS_MM = 2.0
 F_THRESH_MIN_N = 1.0
@@ -30,7 +30,6 @@ TIME_COLUMN = "time_s"
 DISTANCE_COLUMN = "marker_dist_m"
 FORCE_COLUMN = "force_N"
 REQUIRED_COLUMNS = [TIME_COLUMN, DISTANCE_COLUMN, FORCE_COLUMN]
-OUTPUT_SUBDIR = "stress_strain"
 
 
 # Read, validate, and clean one preprocessing CSV.
@@ -264,22 +263,9 @@ def _resolve_inputs(in_path: Path) -> tuple[list[Path], str]:
     return [in_path], in_path.stem
 
 
-# Recreate the output directory for one processing batch.
-def _prepare_batch_dir(out_dir: Path, batch_name: str) -> Path:
-    batch_dir = out_dir / f"{batch_name}"
-    if batch_dir.exists():
-        if batch_dir.is_dir():
-            shutil.rmtree(batch_dir)
-        else:
-            batch_dir.unlink()
-    batch_dir.mkdir(parents=True, exist_ok=True)
-    return batch_dir
-
-
 # Process all configured input files.
 def main() -> None:
     files, batch_name = _resolve_inputs(INPUT_PATH)
-    batch_dir = _prepare_batch_dir(OUT_ROOT / OUTPUT_SUBDIR, batch_name)
 
     generated_at_utc = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     code_version = "unknown"
@@ -302,7 +288,7 @@ def main() -> None:
             "code_version": code_version,
             **summary,
         }
-        save_outputs(batch_dir, f.stem, preprocessing, full, final, summary_out, export_debug=EXPORT_DEBUG)
+        save_outputs(OUT_ROOT, f.stem, preprocessing, full, final, summary_out, export_debug=EXPORT_DEBUG)
         counts = summary["processing"]
         print(f"Processed: {f.name}  -> wrote {counts['n_rows_output']}/{counts['n_rows_preprocessing']} rows")
 
