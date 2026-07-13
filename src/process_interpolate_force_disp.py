@@ -49,7 +49,7 @@ EXPORT_DEBUG = False
 
 
 # Read and validate one force-time or distance-time CSV for interpolation.
-def _read_time_value_table(path: Path, value_kind: str) -> tuple[np.ndarray, np.ndarray, int]:
+def _read_time_value_table(path: Path, value_kind: str) -> tuple[np.ndarray, np.ndarray, dict]:
     if path.suffix.lower() != ".csv":
         raise ValueError(f"Unsupported file type for {path.name}: {path.suffix}. Only .csv is supported.")
 
@@ -74,12 +74,22 @@ def _read_time_value_table(path: Path, value_kind: str) -> tuple[np.ndarray, np.
 
     n_rows_input = len(out)
     value_column = required_columns[1]
+    rows_per_time = out.groupby(TIME_COLUMN).size()
+    repeated_times = rows_per_time[rows_per_time > 1]
     out = out.sort_values(TIME_COLUMN).groupby(TIME_COLUMN, as_index=False).mean(numeric_only=True)
+
+    averaging = {
+        "n_rows_input": int(n_rows_input),
+        "n_rows_after_averaging": int(len(out)),
+        "n_time_points_averaged": int(len(repeated_times)),
+        "n_rows_collapsed_by_averaging": int(n_rows_input - len(out)),
+        "averaging_applied": bool(len(repeated_times)),
+    }
 
     if len(out) < 2:
         raise ValueError(f"Need at least 2 distinct time points in {path} for interpolation.")
 
-    return out[TIME_COLUMN].to_numpy(float), out[value_column].to_numpy(float), n_rows_input
+    return out[TIME_COLUMN].to_numpy(float), out[value_column].to_numpy(float), averaging
 
 
 # Find experiment directories containing both required input CSV files.
@@ -119,8 +129,8 @@ def _interp_on_base(base_t: np.ndarray, src_t: np.ndarray, src_v: np.ndarray) ->
 
 # Merge one force/distance pair over its overlapping time range.
 def _combine_pair(force_path: Path, distance_path: Path) -> tuple[pd.DataFrame, dict]:
-    f_t, f_v, n_force = _read_time_value_table(force_path, "force")
-    d_t, d_v, n_distance = _read_time_value_table(distance_path, "distance")
+    f_t, f_v, force_averaging = _read_time_value_table(force_path, "force")
+    d_t, d_v, distance_averaging = _read_time_value_table(distance_path, "distance")
 
     if TIME_BASE == "force":
         time_s = f_t
@@ -148,8 +158,9 @@ def _combine_pair(force_path: Path, distance_path: Path) -> tuple[pd.DataFrame, 
 
     interpolation = {
         "time_base": TIME_BASE,
-        "n_rows_force_input": n_force,
-        "n_rows_distance_input": n_distance,
+        "n_rows_force_input": force_averaging["n_rows_input"],
+        "n_rows_distance_input": distance_averaging["n_rows_input"],
+        "distance_averaging": distance_averaging,
         "n_rows_interpolated": int(len(out)),
         "start_time_s": float(out[TIME_COLUMN].min()),
         "end_time_s": float(out[TIME_COLUMN].max()),
