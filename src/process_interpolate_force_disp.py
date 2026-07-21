@@ -43,9 +43,40 @@ INPUT_COLUMNS = {
 TIME_BASE = "force"  # Use "force" or "distance".
 F_THRESH_MIN_N = 1.0
 F_THRESH_FRAC_OF_MAX = 0.01
-FORCE_CUTOFF_N = 30.0  # Set to 0 to keep the complete force-displacement curve.
+FORCE_CUTOFF_N = 25  # Set to 0 to keep the complete force-displacement curve.
 EXPORT_DEBUG = False
 CSV_FLOAT_FORMAT = "%.12f"
+
+
+def _estimate_l0_from_initial_segment(
+    marker_dist_m: np.ndarray,
+    force_n: np.ndarray,
+    f_thresh_n: float,
+    min_points: int = 3,
+    fallback_points: int = 10,
+) -> float:
+    if len(marker_dist_m) == 0:
+        return float("nan")
+
+    valid = np.isfinite(marker_dist_m) & np.isfinite(force_n)
+    if not valid.any():
+        return float("nan")
+
+    low_force = valid & (force_n <= f_thresh_n)
+
+    initial_count = 0
+    for is_low in low_force:
+        if is_low:
+            initial_count += 1
+        else:
+            break
+
+    if initial_count >= min_points:
+        return float(np.nanmedian(marker_dist_m[:initial_count]))
+
+    valid_marker = marker_dist_m[valid]
+    n_fallback = min(fallback_points, len(valid_marker))
+    return float(np.nanmedian(valid_marker[:n_fallback]))
 
 
 def compute_force_displacement(
@@ -60,11 +91,7 @@ def compute_force_displacement(
     f_max = float(np.nanmax(force_n)) if len(force_n) else float("nan")
     f_thresh = float(max(f_thresh_min_N, f_thresh_frac_of_max * f_max))
 
-    low_mask = force_n <= f_thresh
-    if low_mask.sum() >= 3:
-        l0_m = float(np.nanmedian(marker_dist_m[low_mask]))
-    else:
-        l0_m = float(np.nanmedian(marker_dist_m[: min(10, len(marker_dist_m))]))
+    l0_m = _estimate_l0_from_initial_segment(marker_dist_m, force_n, f_thresh)
 
     displacement_m = marker_dist_m - l0_m
     full = pd.DataFrame(
@@ -419,6 +446,10 @@ def main() -> None:
         summary["processing"]["force_range_N"] = [
             float(final[FORCE_COLUMN].min()),
             float(final[FORCE_COLUMN].max()),
+        ]
+        summary["processing"]["displacement_range_m"] = [
+            float(final["displacement_m"].min()),
+            float(final["displacement_m"].max()),
         ]
         summary["metrics"]["max_force_N"] = float(final[FORCE_COLUMN].max())
         summary["metrics"]["max_displacement_m"] = float(final["displacement_m"].max())

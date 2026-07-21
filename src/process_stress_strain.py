@@ -1,8 +1,10 @@
-"""Convert preprocessed tensile CSV data into engineering stress-strain results.
+"""Convert processed force-displacement data into engineering stress-strain results.
 
-Edit the configuration constants below, then run this file directly. Each input
-CSV is validated, L0 is estimated, engineering stress and strain are calculated,
-and the processed CSV and JSON summary are written to disk.
+Edit the configuration constants below, then run this file directly. Each
+experiment folder under INPUT_PATH must contain <experiment>_force_disp.csv and
+<experiment>_summary.json. The script reads displacement and force, reuses L0
+from the force-displacement summary, computes engineering stress-strain, and
+writes processed CSV and JSON outputs.
 """
 
 from __future__ import annotations
@@ -20,38 +22,12 @@ import pandas as pd
 # Configuration: edit these constants before running the script.
 INPUT_PATH = Path("data/processed_force_disp")  # One combined CSV or a folder of combined CSV files.
 OUT_ROOT = Path("data/processed_stress_strain")
-WIDTH_MM = 6.0
-THICKNESS_MM = 1.0
-F_THRESH_MIN_N = 1.0
-F_THRESH_FRAC_OF_MAX = 0.01
+WIDTH_MM = 10.0
+THICKNESS_MM = 3.0
 EXPORT_DEBUG = False
 CSV_FLOAT_FORMAT = "%.12f"
 
-# Required input column names.
-TIME_COLUMN = "time_s"
-DISTANCE_COLUMN = "marker_dist_m"
 FORCE_COLUMN = "force_N"
-REQUIRED_COLUMNS = [TIME_COLUMN, DISTANCE_COLUMN, FORCE_COLUMN]
-
-
-# Read, validate, and clean one preprocessing CSV.
-def read_preprocessing_table(path: Path) -> pd.DataFrame:
-    if path.suffix.lower() != ".csv":
-        raise ValueError(f"Unsupported file type: {path.suffix}. Only .csv is supported.")
-
-    df = pd.read_csv(path)
-    df = df.rename(columns={c: c.strip() for c in df.columns})
-
-    missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
-    if missing:
-        raise ValueError(f"Missing required columns: {missing}. Found: {list(df.columns)}")
-
-    out = df[REQUIRED_COLUMNS].copy().dropna()
-    for c in out.columns:
-        out[c] = pd.to_numeric(out[c], errors="coerce")
-    out = out.dropna()
-
-    return out
 
 
 # Fit a straight line and return its slope, intercept, and R-squared value.
@@ -174,64 +150,6 @@ def _compute_metrics(full: pd.DataFrame) -> dict:
     }
 
 
-# Calculate L0, engineering stress/strain, and summary metrics.
-def compute_engineering(
-    preprocessing: pd.DataFrame,
-    width_mm: float,
-    thickness_mm: float,
-    f_thresh_min_N: float = 1.0,
-    f_thresh_frac_of_max: float = 0.01,
-) -> tuple[pd.DataFrame, dict, pd.DataFrame]:
-    time_s = preprocessing[TIME_COLUMN].to_numpy(float)
-    marker_dist_m = preprocessing[DISTANCE_COLUMN].to_numpy(float)
-    force_N = preprocessing[FORCE_COLUMN].to_numpy(float)
-
-    area_m2 = (width_mm / 1000.0) * (thickness_mm / 1000.0)
-
-    f_max = float(np.nanmax(force_N)) if len(force_N) else float("nan")
-    f_thresh = float(max(f_thresh_min_N, f_thresh_frac_of_max * f_max))
-
-    low_mask = force_N <= f_thresh
-    if low_mask.sum() >= 3:
-        l0_m = float(np.nanmedian(marker_dist_m[low_mask]))
-    else:
-        l0_m = float(np.nanmedian(marker_dist_m[: min(10, len(marker_dist_m))]))
-
-    strain_eng = (marker_dist_m - l0_m) / l0_m
-    stress_MPa = (force_N / area_m2) / 1e6
-
-    full = pd.DataFrame(
-        {
-            "time_s": time_s,
-            "marker_dist_m": marker_dist_m,
-            "force_N": force_N,
-            "strain_eng": strain_eng,
-            "stress_eng_MPa": stress_MPa,
-        }
-    )
-
-    final = full[["strain_eng", "stress_eng_MPa"]].copy().dropna()
-
-    metrics = _compute_metrics(full)
-
-    summary = {
-        "specimen_geometry": {
-            "width_mm": width_mm,
-            "thickness_mm": thickness_mm,
-            "area_m2": area_m2,
-        },
-        "processing": {
-            "F_thresh_N": f_thresh,
-            "L0_m": l0_m,
-            "n_rows_preprocessing": int(len(preprocessing)),
-            "n_rows_output": int(len(final)),
-        },
-        "metrics": metrics,
-    }
-
-    return final, summary, full
-
-
 def compute_engineering_from_force_disp(
     force_disp: pd.DataFrame,
     l0_m: float,
@@ -313,12 +231,13 @@ def save_outputs(
     (out_dir / f"{stem}_summary.json").write_text(json.dumps(summary, indent=2))
 
 
-# Resolve a single CSV or a directory of CSV files into a processing batch.
+# Resolve INPUT_PATH into experiment folders with force_disp + summary files.
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Convert tensile data to engineering stress-strain outputs. "
-            "Provide zero, one, or many experiment folder names under INPUT_PATH."
+            "Provide zero, one, or many experiment folder names under INPUT_PATH "
+            "(data/processed_force_disp by default)."
         )
     )
     parser.add_argument(
@@ -348,68 +267,48 @@ def _filter_experiment_inputs(
 
 
 def _resolve_inputs(in_path: Path, selected_experiments: list[str]) -> tuple[dict[str, dict], str]:
-    if in_path.is_dir():
-        subdirs = sorted([p for p in in_path.iterdir() if p.is_dir()])
-        if subdirs:
-            experiment_inputs: dict[str, dict] = {}
-            invalid_folders: list[str] = []
+    if not in_path.is_dir():
+        raise SystemExit(
+            f"INPUT_PATH must be an experiment root directory containing per-experiment folders: {in_path}"
+        )
 
-            for exp_dir in subdirs:
-                exp_name = exp_dir.name
-                force_disp_csv = exp_dir / f"{exp_name}_force_disp.csv"
-                summary_json = exp_dir / f"{exp_name}_summary.json"
+    subdirs = sorted([p for p in in_path.iterdir() if p.is_dir()])
+    if not subdirs:
+        raise SystemExit("No experiment folders found in INPUT_PATH.")
 
-                if force_disp_csv.is_file() and summary_json.is_file():
-                    experiment_inputs[exp_name] = {
-                        "mode": "force_disp",
-                        "force_disp_csv": force_disp_csv,
-                        "summary_json": summary_json,
-                    }
-                    continue
+    experiment_inputs: dict[str, dict] = {}
+    invalid_folders: list[str] = []
 
-                csv_files = sorted([p for p in exp_dir.iterdir() if p.is_file() and p.suffix.lower() == ".csv"])
-                if len(csv_files) == 1:
-                    experiment_inputs[exp_name] = {
-                        "mode": "preprocessing",
-                        "csv_path": csv_files[0],
-                    }
-                elif len(csv_files) > 1:
-                    invalid_folders.append(f"{exp_name} (multiple CSV files; expected one or *_force_disp.csv + *_summary.json)")
+    for exp_dir in subdirs:
+        exp_name = exp_dir.name
+        force_disp_csv = exp_dir / f"{exp_name}_force_disp.csv"
+        summary_json = exp_dir / f"{exp_name}_summary.json"
 
-            if invalid_folders:
-                preview = ", ".join(invalid_folders[:5])
-                raise SystemExit(
-                    "Found experiment folder(s) with invalid stress input layout: "
-                    f"{preview}{' ...' if len(invalid_folders) > 5 else ''}"
-                )
-
-            if not experiment_inputs:
-                raise SystemExit("No valid experiment folders found in input folder.")
-
-            return _filter_experiment_inputs(experiment_inputs, selected_experiments), in_path.name
-
-        files = sorted([p for p in in_path.iterdir() if p.is_file() and p.suffix.lower() == ".csv"])
-        if not files:
-            raise SystemExit("No .csv files found in input folder.")
-
-        experiment_inputs = {
-            p.stem: {
-                "mode": "preprocessing",
-                "csv_path": p,
+        if force_disp_csv.is_file() and summary_json.is_file():
+            experiment_inputs[exp_name] = {
+                "mode": "force_disp",
+                "force_disp_csv": force_disp_csv,
+                "summary_json": summary_json,
             }
-            for p in files
-        }
-        return _filter_experiment_inputs(experiment_inputs, selected_experiments), in_path.name
+        else:
+            missing_parts = []
+            if not force_disp_csv.is_file():
+                missing_parts.append(force_disp_csv.name)
+            if not summary_json.is_file():
+                missing_parts.append(summary_json.name)
+            invalid_folders.append(f"{exp_name} (missing: {', '.join(missing_parts)})")
 
-    if selected_experiments:
-        raise SystemExit("Experiment names are only supported when INPUT_PATH is a directory.")
+    if invalid_folders:
+        preview = ", ".join(invalid_folders[:5])
+        raise SystemExit(
+            "Found experiment folder(s) missing required force-disp inputs: "
+            f"{preview}{' ...' if len(invalid_folders) > 5 else ''}"
+        )
 
-    return {
-        in_path.stem: {
-            "mode": "preprocessing",
-            "csv_path": in_path,
-        }
-    }, in_path.stem
+    if not experiment_inputs:
+        raise SystemExit("No valid experiment folders found in INPUT_PATH.")
+
+    return _filter_experiment_inputs(experiment_inputs, selected_experiments), in_path.name
 
 
 def _read_force_disp_inputs(
@@ -456,36 +355,25 @@ def main() -> None:
     except Exception:
         pass
     for experiment_name, exp_input in experiment_inputs.items():
-        if exp_input["mode"] == "force_disp":
-            force_disp, l0_m, f_thresh_n = _read_force_disp_inputs(
-                exp_input["force_disp_csv"],
-                exp_input["summary_json"],
-            )
-            final, summary, full = compute_engineering_from_force_disp(
-                force_disp,
-                l0_m=l0_m,
-                width_mm=WIDTH_MM,
-                thickness_mm=THICKNESS_MM,
-                f_thresh_n=f_thresh_n,
-            )
-            preprocessing = pd.DataFrame(
-                {
-                    "time_s": np.arange(len(force_disp), dtype=float),
-                    "marker_dist_m": force_disp["displacement_m"].to_numpy(float) + l0_m,
-                    "force_N": force_disp["force_N"].to_numpy(float),
-                }
-            )
-            source_name = exp_input["force_disp_csv"].name
-        else:
-            preprocessing = read_preprocessing_table(exp_input["csv_path"])
-            final, summary, full = compute_engineering(
-                preprocessing,
-                width_mm=WIDTH_MM,
-                thickness_mm=THICKNESS_MM,
-                f_thresh_min_N=F_THRESH_MIN_N,
-                f_thresh_frac_of_max=F_THRESH_FRAC_OF_MAX,
-            )
-            source_name = exp_input["csv_path"].name
+        force_disp, l0_m, f_thresh_n = _read_force_disp_inputs(
+            exp_input["force_disp_csv"],
+            exp_input["summary_json"],
+        )
+        final, summary, full = compute_engineering_from_force_disp(
+            force_disp,
+            l0_m=l0_m,
+            width_mm=WIDTH_MM,
+            thickness_mm=THICKNESS_MM,
+            f_thresh_n=f_thresh_n,
+        )
+        preprocessing = pd.DataFrame(
+            {
+                "time_s": np.arange(len(force_disp), dtype=float),
+                "marker_dist_m": force_disp["displacement_m"].to_numpy(float) + l0_m,
+                "force_N": force_disp[FORCE_COLUMN].to_numpy(float),
+            }
+        )
+        source_name = exp_input["force_disp_csv"].name
 
         summary_out = {
             "test_group": batch_name,
